@@ -3,8 +3,7 @@ const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
 const bodyParser = require('body-parser');
 const nodemailer = require('nodemailer');
-const axios = require('axios');
-const cheerio = require('cheerio');
+const fetchProductInfo = require('./fetchProductInfo');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -49,34 +48,17 @@ async function main() {
             });
         };
 
-        // Function to fetch and parse product info from a product URL
-        const fetchProductInfo = async (url) => {
-            try {
-                const { data } = await axios.get(url);
-                const $ = cheerio.load(data);
-
-                // Extract price from HTML using the provided selector
-                const priceString = $('.price-box .special-price .price .price').text(); // Using the given selector
-                const price = parseFloat(priceString.replace(/\s/g, '').replace('грн', '').replace('&nbsp;', '').trim());
-
-                // Extract product name using the correct selector
-                const brand = $('span.h1-brand').text().trim();
-                const name = $('span.h1-name').text().trim();
-                const productName = `${brand} ${name}`;
-
-                return { price, productName };
-            } catch (error) {
-                console.error('Error fetching or parsing product info:', error);
-                return null;
-            }
-        };
-
+        // Function to check all products and send email notifications if price changes
         const checkAndNotifyPriceChange = async () => {
             const products = await productsCollection.find({}).toArray();
             const changedProducts = [];
 
             for (const product of products) {
                 const productInfo = await fetchProductInfo(product.url);
+                console.log(`Checking product: ${product.url}`);
+                console.log(`Fetched price: ${productInfo ? productInfo.price : 'Error fetching product info'}`);
+                console.log(`Current price in DB: ${product.current_price}`);
+
                 if (productInfo && productInfo.price !== product.current_price) {
                     await productsCollection.updateOne(
                         { _id: product._id },
@@ -104,6 +86,9 @@ async function main() {
             return changedProducts;
         };
 
+        // Schedule the function to run periodically (e.g., every hour)
+        setInterval(checkAndNotifyPriceChange, 3600000); // 1 hour = 3600000 milliseconds
+
         // Routes
         app.get('/', (req, res) => {
             res.send('Welcome to the Price Monitoring App!');
@@ -125,8 +110,6 @@ async function main() {
             }
         });
 
-
-        // delete one product from database
         app.delete('/api/delete-product/:id', async (req, res) => {
             try {
                 await productsCollection.deleteOne({ _id: new ObjectId(req.params.id) });
@@ -154,7 +137,6 @@ async function main() {
             }
         });
 
-
         // Start the server
         app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
     } catch (err) {
@@ -163,4 +145,3 @@ async function main() {
 }
 
 main().catch(console.error);
-
