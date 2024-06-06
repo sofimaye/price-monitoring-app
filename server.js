@@ -5,22 +5,23 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 const dotenv = require('dotenv');
+const fetchProductInfo = require("./fetchProductInfo");
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 const mongoUri = process.env.MONGODB_URI;
-const client = new MongoClient(mongoUri, { useNewUrlParser: true, useUnifiedTopology: true });
+const client = new MongoClient(mongoUri, { useUnifiedTopology: true });
 
-// Middleware to disable CORS
+app.use(bodyParser.json());
+
 app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*'); // Setting this to an empty string effectively disables CORS
+    res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', '*');
     res.header('Access-Control-Allow-Headers', '*');
     next();
 });
-app.use(bodyParser.json());
 
 client.connect().then(mongo => {
     console.log('Connected to MongoDB');
@@ -40,6 +41,11 @@ client.connect().then(mongo => {
             next();
         });
     };
+
+    // Root route
+    app.get('/', (req, res) => {
+        res.send('Welcome to the Price Monitoring App API');
+    });
 
     app.post('/api/register', async (req, res) => {
         const { email, password } = req.body;
@@ -61,7 +67,8 @@ client.connect().then(mongo => {
         }
     });
 
-    app.post('/api/login', async (req, res) => {
+    app.post('/api/login', async (req,
+                                  res) => {
         const { email, password } = req.body;
         try {
             console.log(`Login attempt: email = ${email}, password = ${password}`);
@@ -77,7 +84,8 @@ client.connect().then(mongo => {
                 return res.status(400).json({ message: 'Invalid email or password' });
             }
 
-            const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+            const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET,
+                { expiresIn: '1h' });
             res.json({ token });
         } catch (error) {
             console.error('Error logging in:', error);
@@ -88,36 +96,46 @@ client.connect().then(mongo => {
     app.post('/api/add-product', authenticateToken, async (req, res) => {
         const { url } = req.body;
         try {
-            const productInfo = await fetchProductInfo(url); // Assuming fetchProductInfo is implemented
+            const productInfo = await fetchProductInfo(url);
             if (productInfo) {
                 const newProduct = { user_id: req.user.userId, url, current_price: productInfo.price, product_name: productInfo.productName, last_checked: new Date() };
                 await productsCollection.insertOne(newProduct);
+                console.log('Product added:', newProduct);
                 res.status(201).json(newProduct);
             } else {
                 res.status(500).json({ message: 'Error fetching product info' });
             }
         } catch (error) {
+            console.error('Error adding product:', error);
             res.status(500).json({ message: 'Error adding product', error });
         }
     });
 
+
     app.get('/api/products', authenticateToken, async (req, res) => {
         try {
+            console.log('Authenticated user:', req.user);
             const products = await productsCollection.find({ user_id: req.user.userId }).toArray();
+            console.log('Fetched products for user', req.user.userId, products);
             res.status(200).json(products);
         } catch (error) {
+            console.error('Error fetching products:', error);
             res.status(500).json({ message: 'Error fetching products', error });
         }
     });
 
     app.delete('/api/delete-product/:id', authenticateToken, async (req, res) => {
         try {
-            await productsCollection.deleteOne({ _id: new ObjectId(req.params.id), user_id: req.user.userId });
+            const productId = new ObjectId(req.params.id);
+            console.log(`Deleting product ${productId} for user ${req.user.userId}`);
+            await productsCollection.deleteOne({ _id: productId, user_id: req.user.userId });
             res.status(200).json({ message: 'Product deleted' });
         } catch (error) {
+            console.error('Error deleting product:', error);
             res.status(500).json({ message: 'Error deleting product', error });
         }
     });
+
 
     app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 });
