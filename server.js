@@ -1,147 +1,123 @@
-require('dotenv').config();
 const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
 const bodyParser = require('body-parser');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
-const fetchProductInfo = require('./fetchProductInfo');
+const dotenv = require('dotenv');
+
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 const mongoUri = process.env.MONGODB_URI;
+const client = new MongoClient(mongoUri, { useNewUrlParser: true, useUnifiedTopology: true });
 
-const client = new MongoClient(mongoUri);
+// Middleware to disable CORS
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*'); // Setting this to an empty string effectively disables CORS
+    res.header('Access-Control-Allow-Methods', '*');
+    res.header('Access-Control-Allow-Headers', '*');
+    next();
+});
+app.use(bodyParser.json());
 
-async function main() {
-    try {
-        // Connect to MongoDB
-        await client.connect();
-        console.log('Connected to MongoDB');
-        const db = client.db('monitoring-app');
-        const productsCollection = db.collection('products');
+client.connect().then(mongo => {
+    console.log('Connected to MongoDB');
+    const db = mongo.db('monitoring-app');
+    const usersCollection = db.collection('users');
+    const productsCollection = db.collection('products');
 
-        // Middleware
-        app.use(bodyParser.json());
+    const authenticateToken = (req, res, next) => {
+        const authHeader = req.header('Authorization');
+        if (!authHeader) return res.status(401).json({ message: 'Authorization header missing' });
+        const token = authHeader.replace('Bearer ', '');
+        if (!token) return res.status(401).json({ message: 'Token missing or malformed' });
 
-        // Email Service
-        const transporter = nodemailer.createTransport({
-            service: 'gmail',
-            auth: {
-                user: process.env.EMAIL_USER,
-                pass: process.env.EMAIL_PASS
-            }
+        jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+            if (err) return res.status(403).json({ message: 'Token is not valid' });
+            req.user = user;
+            next();
         });
+    };
 
-        const sendNotificationEmail = (to, subject, text) => {
-            const mailOptions = {
-                from: process.env.EMAIL_USER,
-                to: to,
-                subject: subject,
-                text: text
-            };
+    app.post('/api/register', async (req, res) => {
+        const { email, password } = req.body;
 
-            transporter.sendMail(mailOptions, (error, info) => {
-                if (error) {
-                    console.log('Error sending email:', error);
-                } else {
-                    console.log('Email sent:', info.response);
-                }
-            });
-        };
+        if (password.length < 5 || password.length > 10) {
+            return res.status(400).json({ message: 'Password must be between 5 and 10 characters long' });
+        }
 
-        // Function to check all products and send email notifications if price changes
-        const checkAndNotifyPriceChange = async () => {
-            const products = await productsCollection.find({}).toArray();
-            const changedProducts = [];
+        try {
+            const userExists = await usersCollection.findOne({ email });
+            if (userExists) return res.status(400).json({ message: 'User already exists' });
 
-            for (const product of products) {
-                const productInfo = await fetchProductInfo(product.url);
-                console.log(`Checking product: ${product.url}`);
-                console.log(`Fetched price: ${productInfo ? productInfo.price : 'Error fetching product info'}`);
-                console.log(`Current price in DB: ${product.current_price}`);
+            const hashedPassword = await bcrypt.hash(password, 10);
+            const newUser = { email, password: hashedPassword };
+            await usersCollection.insertOne(newUser);
+            res.status(201).json({ message: 'User registered successfully' });
+        } catch (error) {
+            res.status(500).json({ message: 'Error registering user', error });
+        }
+    });
 
-                if (productInfo && productInfo.price !== product.current_price) {
-                    await productsCollection.updateOne(
-                        { _id: product._id },
-                        {
-                            $set: {
-                                current_price: productInfo.price,
-                                last_checked: new Date()
-                            }
-                        }
-                    );
-                    sendNotificationEmail(
-                        product.user_email,
-                        'Price Change Alert',
-                        `The price of the product ${productInfo.productName} at ${product.url} has changed from ${product.current_price} to ${productInfo.price}.`
-                    );
-                    changedProducts.push({
-                        productName: productInfo.productName,
-                        oldPrice: product.current_price,
-                        newPrice: productInfo.price,
-                        url: product.url
-                    });
-                }
+    app.post('/api/login', async (req, res) => {
+        const { email, password } = req.body;
+        try {
+            console.log(`Login attempt: email = ${email}, password = ${password}`);
+            const user = await usersCollection.findOne({ email });
+            if (!user) {
+                console.log('User not found');
+                return res.status(400).json({ message: 'Invalid email or password' });
             }
 
-            return changedProducts;
-        };
-
-        // Schedule the function to run periodically (e.g., every hour)
-        setInterval(checkAndNotifyPriceChange, 3600000); // 1 hour = 3600000 milliseconds
-
-        // Routes
-        app.get('/', (req, res) => {
-            res.send('Welcome to the Price Monitoring App!');
-        });
-
-        app.post('/api/add-product', async (req, res) => {
-            const { user_email, url } = req.body;
-            try {
-                const productInfo = await fetchProductInfo(url);
-                if (productInfo) {
-                    const newProduct = { user_email, url, current_price: productInfo.price, product_name: productInfo.productName, last_checked: new Date() };
-                    await productsCollection.insertOne(newProduct);
-                    res.status(201).json(newProduct);
-                } else {
-                    res.status(500).json({ message: 'Error fetching product info' });
-                }
-            } catch (error) {
-                res.status(500).json({ message: 'Error adding product', error });
+            const isMatch = await bcrypt.compare(password, user.password);
+            if (!isMatch) {
+                console.log('Password does not match');
+                return res.status(400).json({ message: 'Invalid email or password' });
             }
-        });
 
-        app.delete('/api/delete-product/:id', async (req, res) => {
-            try {
-                await productsCollection.deleteOne({ _id: new ObjectId(req.params.id) });
-                res.status(200).json({ message: 'Product deleted' });
-            } catch (error) {
-                res.status(500).json({ message: 'Error deleting product', error });
+            const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+            res.json({ token });
+        } catch (error) {
+            console.error('Error logging in:', error);
+            res.status(500).json({ message: 'Error logging in', error });
+        }
+    });
+
+    app.post('/api/add-product', authenticateToken, async (req, res) => {
+        const { url } = req.body;
+        try {
+            const productInfo = await fetchProductInfo(url); // Assuming fetchProductInfo is implemented
+            if (productInfo) {
+                const newProduct = { user_id: req.user.userId, url, current_price: productInfo.price, product_name: productInfo.productName, last_checked: new Date() };
+                await productsCollection.insertOne(newProduct);
+                res.status(201).json(newProduct);
+            } else {
+                res.status(500).json({ message: 'Error fetching product info' });
             }
-        });
+        } catch (error) {
+            res.status(500).json({ message: 'Error adding product', error });
+        }
+    });
 
-        app.get('/api/products', async (req, res) => {
-            try {
-                const products = await productsCollection.find({}).toArray();
-                res.status(200).json(products);
-            } catch (error) {
-                res.status(500).json({ message: 'Error fetching products', error });
-            }
-        });
+    app.get('/api/products', authenticateToken, async (req, res) => {
+        try {
+            const products = await productsCollection.find({ user_id: req.user.userId }).toArray();
+            res.status(200).json(products);
+        } catch (error) {
+            res.status(500).json({ message: 'Error fetching products', error });
+        }
+    });
 
-        app.get('/api/check-prices', async (req, res) => {
-            try {
-                const changedProducts = await checkAndNotifyPriceChange();
-                res.status(200).json({ message: 'Price check completed.', changedProducts });
-            } catch (error) {
-                res.status(500).json({ message: 'Error checking prices', error });
-            }
-        });
+    app.delete('/api/delete-product/:id', authenticateToken, async (req, res) => {
+        try {
+            await productsCollection.deleteOne({ _id: new ObjectId(req.params.id), user_id: req.user.userId });
+            res.status(200).json({ message: 'Product deleted' });
+        } catch (error) {
+            res.status(500).json({ message: 'Error deleting product', error });
+        }
+    });
 
-        // Start the server
-        app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-    } catch (err) {
-        console.error(err);
-    }
-}
-
-main().catch(console.error);
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+});
