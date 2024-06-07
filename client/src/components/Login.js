@@ -25,10 +25,10 @@ const Login = ({ setToken }) => {
         <div className="login-container">
             <h2>Login</h2>
             <form onSubmit={handleSubmit} autoComplete="on">
-                <input type="email" autoComplete="username"
+                <input type="email" name="email"
                        value={email} onChange={(e) => setEmail(e.target.value)}
                        placeholder="Email" required />
-                <input  autoComplete="current-password"
+                <input  name="password"
                          type="password" value={password}
                          onChange={(e) => setPassword(e.target.value)}
                          placeholder="Password" required />

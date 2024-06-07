@@ -2,20 +2,20 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import '../styles/AddProduct.css';
 
-
-const AddProduct = ({ token }) => {
+const AddProduct = ({ token, fetchProducts }) => {
     const [url, setUrl] = useState('');
     const [message, setMessage] = useState('');
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
-            const response = await axios.post('/api/add-product', { url }, {
+            await axios.post('http://localhost:3001/api/add-product', { url }, {
                 headers: {
                     Authorization: `Bearer ${token}`
                 }
             });
             setMessage('Product added successfully');
+            fetchProducts().catch(console.error); // Handle the promise here
         } catch (error) {
             setMessage('Error adding product');
         }

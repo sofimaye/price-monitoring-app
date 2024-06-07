@@ -1,30 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import axios from 'axios';
 import '../styles/ProductList.css';
 
-const ProductList = ({ token }) => {
-    const [products, setProducts] = useState([]);
-
-    useEffect(() => {
-        const fetchProducts = async () => {
-            try {
-                console.log('Fetching products with token:', token);
-                const response = await axios.get('http://localhost:3001/api/products',
-                    {
-                    headers: {
-                        Authorization: `Bearer ${token}`
-                    }
-                });
-                setProducts(response.data);
-                console.log('Fetched products:', response.data);
-            } catch (error) {
-                console.error('Error fetching products', error);
-            }
-        };
-
-        fetchProducts().catch(console.error);
-    }, [token]);
-
+const ProductList = ({ products, token, fetchProducts }) => {
     const deleteProduct = async (id) => {
         try {
             await axios.delete(`http://localhost:3001/api/delete-product/${id}`, {
@@ -32,7 +10,7 @@ const ProductList = ({ token }) => {
                     Authorization: `Bearer ${token}`
                 }
             });
-            setProducts(products.filter((product) => product._id !== id));
+            fetchProducts().catch(console.error); // Handle the promise here
         } catch (error) {
             console.error('Error deleting product', error);
         }
