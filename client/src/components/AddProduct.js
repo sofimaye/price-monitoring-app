@@ -9,15 +9,17 @@ const AddProduct = ({ token, fetchProducts }) => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
-            await axios.post('http://localhost:3001/api/add-product', { url }, {
+            const response = await axios.post('/api/add-product', { url }, {
                 headers: {
                     Authorization: `Bearer ${token}`
                 }
             });
-            setMessage('Product added successfully');
-            fetchProducts().catch(console.error); // Handle the promise here
+            setMessage('Product added successfully!');
+            setUrl(''); // Clear the input field
+            fetchProducts(); // Fetch updated product list
         } catch (error) {
             setMessage('Error adding product');
+            console.error('Error adding product', error);
         }
     };
 
@@ -25,7 +27,13 @@ const AddProduct = ({ token, fetchProducts }) => {
         <div className="add-product-container">
             <h2>Add Product</h2>
             <form onSubmit={handleSubmit}>
-                <input type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Product URL" required />
+                <input
+                    type="url"
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    placeholder="Product URL"
+                    required
+                />
                 <button type="submit">Add Product</button>
             </form>
             {message && <p>{message}</p>}

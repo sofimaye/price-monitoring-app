@@ -3,13 +3,12 @@ const { MongoClient, ObjectId } = require('mongodb');
 const bodyParser = require('body-parser');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
 const dotenv = require('dotenv');
 const fetchProductInfo = require('./fetchProductInfo');
+const path = require('path');
 
+// Load environment variables
 dotenv.config();
-console.log('Email user:', process.env.EMAIL_USER);
-console.log('Email pass:', process.env.EMAIL_PASS);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -30,32 +29,7 @@ client.connect().then(mongo => {
     const db = mongo.db('monitoring-app');
     const usersCollection = db.collection('users');
     const productsCollection = db.collection('products');
-
-    const transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASS,
-        },
-    });
-
-    const sendConfirmationEmail = async (to, productInfo) => {
-        const mailOptions = {
-            from: process.env.EMAIL_USER,
-            to: to,
-            subject: 'Subscription Confirmation',
-            text: `You have successfully subscribed to monitor the price of ${productInfo.productName} 
-            at ${productInfo.url}. Current price is ${productInfo.price} грн.`,
-        };
-
-        try {
-            const info = await transporter.sendMail(mailOptions);
-            console.log('Email sent:', info.response);
-
-        } catch (error) {
-            console.error('Error sending confirmation email:', error);
-        }
-    };
+    const notificationsCollection = db.collection('notifications');
 
     const authenticateToken = (req, res, next) => {
         const authHeader = req.header('Authorization');
@@ -94,6 +68,7 @@ client.connect().then(mongo => {
             await usersCollection.insertOne(newUser);
             res.status(201).json({ message: 'User registered successfully' });
         } catch (error) {
+            console.error('Error registering user:', error);
             res.status(500).json({ message: 'Error registering user', error });
         }
     });
@@ -101,18 +76,11 @@ client.connect().then(mongo => {
     app.post('/api/login', async (req, res) => {
         const { email, password } = req.body;
         try {
-            console.log(`Login attempt: email = ${email}, password = ${password}`);
             const user = await usersCollection.findOne({ email });
-            if (!user) {
-                console.log('User not found');
-                return res.status(400).json({ message: 'Invalid email or password' });
-            }
+            if (!user) return res.status(400).json({ message: 'Invalid email or password' });
 
             const isMatch = await bcrypt.compare(password, user.password);
-            if (!isMatch) {
-                console.log('Password does not match');
-                return res.status(400).json({ message: 'Invalid email or password' });
-            }
+            if (!isMatch) return res.status(400).json({ message: 'Invalid email or password' });
 
             const token = jwt.sign({ userId: user._id.toString() }, process.env.JWT_SECRET, { expiresIn: '1h' });
             res.json({ token });
@@ -130,8 +98,6 @@ client.connect().then(mongo => {
                 const newProduct = { user_id: req.user.userId, url, current_price: productInfo.price, product_name: productInfo.productName, last_checked: new Date() };
                 await productsCollection.insertOne(newProduct);
                 console.log('Product added:', newProduct);
-
-                await sendConfirmationEmail(req.user.email, productInfo);
                 res.status(201).json(newProduct);
             } else {
                 res.status(500).json({ message: 'Error fetching product info' });
@@ -144,13 +110,21 @@ client.connect().then(mongo => {
 
     app.get('/api/products', authenticateToken, async (req, res) => {
         try {
-            console.log('Authenticated user:', req.user);
             const products = await productsCollection.find({ user_id: req.user.userId }).toArray();
-            console.log('Fetched products for user', req.user.userId, products);
             res.status(200).json(products);
         } catch (error) {
             console.error('Error fetching products:', error);
             res.status(500).json({ message: 'Error fetching products', error });
+        }
+    });
+
+    app.get('/api/notifications', authenticateToken, async (req, res) => {
+        try {
+            const notifications = await notificationsCollection.find({ user_id: req.user.userId }).toArray();
+            res.status(200).json(notifications);
+        } catch (error) {
+            console.error('Error fetching notifications:', error);
+            res.status(500).json({ message: 'Error fetching notifications', error });
         }
     });
 
@@ -163,5 +137,50 @@ client.connect().then(mongo => {
         }
     });
 
+    app.delete('/api/notifications', authenticateToken, async (req, res) => {
+        try {
+            await notificationsCollection.deleteMany({ user_id: req.user.userId });
+            res.status(200).json({ message: 'Notifications cleared' });
+        } catch (error) {
+            console.error('Error clearing notifications:', error);
+            res.status(500).json({ message: 'Error clearing notifications', error });
+        }
+    });
+
     app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 });
+
+setInterval(async () => {
+    try {
+        const db = client.db('monitoring-app');
+        const productsCollection = db.collection('products');
+        const notificationsCollection = db.collection('notifications');
+
+        const products = await productsCollection.find({}).toArray();
+
+        for (const product of products) {
+            const productInfo = await fetchProductInfo(product.url);
+            if (productInfo.price !== product.current_price) {
+                await productsCollection.updateOne(
+                    { _id: product._id },
+                    { $set: { current_price: productInfo.price, last_checked: new Date() } }
+                );
+                const notification = {
+                    user_id: product.user_id,
+                    product_id: product._id,
+                    message: `Price for ${product.product_name} changed from  ${productInfo.price} to ${product.current_price}`,
+                    date: new Date()
+                };
+                await notificationsCollection.insertOne(notification);
+                console.log('Notification added:', notification);
+            } else {
+                await productsCollection.updateOne(
+                    { _id: product._id },
+                    { $set: { last_checked: new Date() } }
+                );
+            }
+        }
+    } catch (error) {
+        console.error('Error checking product prices:', error);
+    }
+}, 300000); // Check every 5 minutes
